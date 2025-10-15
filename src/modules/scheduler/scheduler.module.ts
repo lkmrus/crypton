@@ -42,8 +42,6 @@ import { SchedulerController } from './scheduler.controller';
     {
       provide: SchedulerService,
       useFactory: () => {
-        // Создаем планировщик с лимитом параллельности 10
-        // Можно получать из ConfigService при необходимости
         return new SchedulerService({ concurrencyLimit: 10 });
       },
     },
@@ -51,4 +49,3 @@ import { SchedulerController } from './scheduler.controller';
   exports: [SchedulerService],
 })
 export class SchedulerModule {}
-

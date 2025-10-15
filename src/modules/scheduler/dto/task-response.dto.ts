@@ -36,4 +36,3 @@ export class TaskResponseDto {
     this.deduplicated = deduplicated;
   }
 }
-

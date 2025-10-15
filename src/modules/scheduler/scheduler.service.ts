@@ -4,7 +4,6 @@ import {
   SchedulerStats,
   TaskConfig,
   TaskFunction,
-  TaskStatus,
   QueuedTask,
 } from './types/scheduler.types';
 
@@ -93,13 +92,11 @@ export class SchedulerService {
     task: TaskFunction<T>,
     config?: TaskConfig,
   ): Promise<T> {
-    // Проверка на shutdown
     if (this.isShuttingDown) {
       this.stats.cancelled++;
       throw new Error('Scheduler is shutting down, cannot accept new tasks');
     }
 
-    // Дедупликация: если задача с таким ключом уже выполняется
     const existingTask = this.runningTasks.get(key);
     if (existingTask) {
       this.stats.deduplicated++;
@@ -107,16 +104,13 @@ export class SchedulerService {
       return existingTask;
     }
 
-    // Увеличиваем счетчик поставленных в очередь задач
     this.stats.enqueued++;
 
-    // Мержим конфигурацию с дефолтной
     const taskConfig: Required<TaskConfig> = {
       ...this.defaultTaskConfig,
       ...config,
     };
 
-    // Создаем Promise для задачи
     const taskPromise = new Promise<T>((resolve, reject) => {
       const queuedTask: QueuedTask<T> = {
         key,
@@ -126,25 +120,21 @@ export class SchedulerService {
         reject,
       };
 
-      // Добавляем задачу в очередь
-      this.pendingQueue.push(() => this.executeTask(queuedTask));
+      this.pendingQueue.push(() => {
+        void this.executeTask(queuedTask);
+      });
       this.stats.pending = this.pendingQueue.length;
 
-      // Запускаем обработку очереди
       this.processQueue();
     });
 
-    // Регистрируем задачу в Map для дедупликации
     this.runningTasks.set(key, taskPromise);
 
-    // После завершения удаляем из Map
     taskPromise
       .finally(() => {
         this.runningTasks.delete(key);
       })
-      .catch(() => {
-        // Ignore errors here, they are handled in executeTask
-      });
+      .catch(() => {});
 
     return taskPromise;
   }
@@ -157,7 +147,6 @@ export class SchedulerService {
    * меньше лимита параллельности
    */
   private processQueue(): void {
-    // Запускаем задачи пока есть место и очередь не пуста
     while (
       this.runningTasksCount < this.config.concurrencyLimit &&
       this.pendingQueue.length > 0
@@ -183,14 +172,12 @@ export class SchedulerService {
   private async executeTask<T>(queuedTask: QueuedTask<T>): Promise<void> {
     const { key, task, config, resolve, reject } = queuedTask;
 
-    // Проверяем shutdown перед выполнением
     if (this.isShuttingDown) {
       this.stats.cancelled++;
       reject(new Error('Task cancelled due to shutdown'));
       return;
     }
 
-    // Увеличиваем счетчик выполняющихся задач
     this.runningTasksCount++;
     this.stats.running = this.runningTasksCount;
 
@@ -199,24 +186,19 @@ export class SchedulerService {
     );
 
     try {
-      // Выполняем задачу с retry логикой
       const result = await this.executeWithRetry(task, config, key);
 
-      // Успешное выполнение
       this.stats.completed++;
       this.logger.debug(`Task completed: key="${key}"`);
       resolve(result);
     } catch (error) {
-      // Задача провалилась после всех попыток
       this.stats.failed++;
       this.logger.error(`Task failed: key="${key}"`, error);
       reject(error instanceof Error ? error : new Error(String(error)));
     } finally {
-      // Освобождаем слот
       this.runningTasksCount--;
       this.stats.running = this.runningTasksCount;
 
-      // Запускаем следующую задачу из очереди
       this.processQueue();
     }
   }
@@ -241,17 +223,15 @@ export class SchedulerService {
     key: string,
   ): Promise<T> {
     let lastError: Error | undefined;
-    const maxAttempts = config.maxRetries + 1; // +1 для первой попытки
+    const maxAttempts = config.maxRetries + 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        // Выполняем задачу
         const result = await task();
         return result;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
 
-        // Если это последняя попытка, выбрасываем ошибку
         if (attempt === maxAttempts) {
           this.logger.warn(
             `Task exhausted all retries: key="${key}", attempts=${attempt}`,
@@ -259,22 +239,18 @@ export class SchedulerService {
           throw lastError;
         }
 
-        // Увеличиваем счетчик retry
         this.stats.retried++;
 
-        // Вычисляем задержку перед следующей попыткой
         const delay = this.calculateRetryDelay(attempt - 1, config);
 
         this.logger.debug(
           `Task retry scheduled: key="${key}", attempt=${attempt}/${maxAttempts}, delay=${delay}ms`,
         );
 
-        // Ждем перед следующей попыткой
         await this.sleep(delay);
       }
     }
 
-    // Этот код никогда не должен выполниться, но TypeScript требует
     throw lastError || new Error('Unknown error');
   }
 
@@ -303,12 +279,10 @@ export class SchedulerService {
   ): number {
     const { baseDelay, jitter } = config;
 
-    // Экспоненциальная задержка: baseDelay * 2^attempt
     const exponentialDelay = baseDelay * Math.pow(2, attempt);
 
-    // Добавляем jitter (случайное отклонение ±jitter%)
     const jitterAmount = exponentialDelay * jitter;
-    const randomJitter = (Math.random() * 2 - 1) * jitterAmount; // от -jitter до +jitter
+    const randomJitter = (Math.random() * 2 - 1) * jitterAmount;
 
     const finalDelay = Math.max(0, exponentialDelay + randomJitter);
 
@@ -346,7 +320,6 @@ export class SchedulerService {
     this.logger.log('Shutdown initiated...');
     this.isShuttingDown = true;
 
-    // Отменяем все ожидающие задачи
     const pendingCount = this.pendingQueue.length;
     this.pendingQueue = [];
     this.stats.cancelled += pendingCount;
@@ -356,13 +329,11 @@ export class SchedulerService {
       this.logger.log(`Cancelled ${pendingCount} pending tasks`);
     }
 
-    // Ожидаем завершения активных задач
     if (this.runningTasksCount > 0) {
       this.logger.log(
         `Waiting for ${this.runningTasksCount} running tasks to complete...`,
       );
 
-      // Ждем пока все активные задачи завершатся
       while (this.runningTasksCount > 0) {
         await this.sleep(100);
       }
@@ -395,4 +366,3 @@ export class SchedulerService {
     return this.isShuttingDown;
   }
 }
-

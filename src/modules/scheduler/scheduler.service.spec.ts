@@ -1,5 +1,4 @@
 import { SchedulerService } from './scheduler.service';
-import { TaskStatus } from './types/scheduler.types';
 
 describe('SchedulerService', () => {
   let service: SchedulerService;
@@ -32,7 +31,7 @@ describe('SchedulerService', () => {
      */
     it('должен корректно обновлять статистику', async () => {
       const task = jest.fn().mockResolvedValue('result');
-      
+
       const initialStats = service.getStats();
       expect(initialStats.enqueued).toBe(0);
       expect(initialStats.completed).toBe(0);
@@ -49,7 +48,7 @@ describe('SchedulerService', () => {
   describe('Контроль параллельности', () => {
     /**
      * Тест: соблюдается лимит параллельности
-     * 
+     *
      * Создаем планировщик с лимитом 2, запускаем 5 задач,
      * проверяем что одновременно не более 2 задач выполняется
      */
@@ -62,10 +61,10 @@ describe('SchedulerService', () => {
       const createTask = (id: number) => async () => {
         runningCount++;
         maxConcurrent = Math.max(maxConcurrent, runningCount);
-        
+
         // Симулируем работу
         await new Promise((resolve) => setTimeout(resolve, 50));
-        
+
         runningCount--;
         return `result-${id}`;
       };
@@ -135,7 +134,9 @@ describe('SchedulerService', () => {
       expect(stats.pending).toBe(0);
 
       // Добавляем вторую задачу (будет в очереди)
-      const promise2 = service.enqueue('task-2', async () => 'result-2');
+      const promise2 = service.enqueue('task-2', () =>
+        Promise.resolve('result-2'),
+      );
 
       // Даем время на обработку
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -161,7 +162,7 @@ describe('SchedulerService', () => {
   describe('Дедупликация задач', () => {
     /**
      * Тест: конкурентные запросы с одним ключом получают один результат
-     * 
+     *
      * Запускаем 3 задачи с одним ключом параллельно,
      * проверяем что функция вызвана только 1 раз
      */
@@ -181,8 +182,12 @@ describe('SchedulerService', () => {
       const results = await Promise.all(promises);
 
       // Все должны получить один результат
-      expect(results).toEqual(['shared-result', 'shared-result', 'shared-result']);
-      
+      expect(results).toEqual([
+        'shared-result',
+        'shared-result',
+        'shared-result',
+      ]);
+
       // Функция должна быть вызвана только 1 раз
       expect(task).toHaveBeenCalledTimes(1);
 
@@ -238,12 +243,12 @@ describe('SchedulerService', () => {
      */
     it('должен повторять задачу при ошибках', async () => {
       let attempts = 0;
-      const task = jest.fn().mockImplementation(async () => {
+      const task = jest.fn().mockImplementation(() => {
         attempts++;
         if (attempts < 3) {
-          throw new Error('Task failed');
+          return Promise.reject(new Error('Task failed'));
         }
-        return 'success';
+        return Promise.resolve('success');
       });
 
       const result = await service.enqueue('retry-key', task, {
@@ -253,7 +258,7 @@ describe('SchedulerService', () => {
 
       expect(result).toBe('success');
       expect(task).toHaveBeenCalledTimes(3);
-      
+
       const stats = service.getStats();
       expect(stats.retried).toBe(2); // 2 retry после первой попытки
       expect(stats.completed).toBe(1);
@@ -291,14 +296,14 @@ describe('SchedulerService', () => {
       let attempts = 0;
       const attemptTimestamps: number[] = [];
 
-      const task = jest.fn().mockImplementation(async () => {
+      const task = jest.fn().mockImplementation(() => {
         attempts++;
         attemptTimestamps.push(Date.now());
-        
+
         if (attempts < 4) {
-          throw new Error('Retry needed');
+          return Promise.reject(new Error('Retry needed'));
         }
-        return 'success';
+        return Promise.resolve('success');
       });
 
       const promise = service.enqueue('delay-test', task, {
@@ -338,7 +343,6 @@ describe('SchedulerService', () => {
       service = new SchedulerService({ concurrencyLimit: 1 });
 
       let task1Completed = false;
-      let task2Cancelled = false;
 
       const task1 = async () => {
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -346,33 +350,20 @@ describe('SchedulerService', () => {
         return 'task1-result';
       };
 
-      const task2 = async () => {
-        return 'task2-result';
-      };
+      const task2 = () => Promise.resolve('task2-result');
 
-      // Запускаем первую задачу (будет активной)
       const promise1 = service.enqueue('task-1', task1);
 
-      // Даем время на запуск
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      // Запускаем вторую задачу (попадет в очередь)
-      const promise2 = service.enqueue('task-2', task2);
+      void service.enqueue('task-2', task2);
 
-      // Даем время на обработку
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      // Инициируем shutdown
       const shutdownPromise = service.shutdown();
 
-      // Первая задача должна завершиться
       await expect(promise1).resolves.toBe('task1-result');
       expect(task1Completed).toBe(true);
-
-      // Вторая задача должна быть отменена (она была в pending)
-      // В текущей реализации pending задачи просто удаляются из очереди и не выполняются
-      // Они не получают reject, поэтому promise2 останется pending
-      // Исправим это в реализации, добавив reject для pending задач
 
       await shutdownPromise;
 
@@ -404,7 +395,7 @@ describe('SchedulerService', () => {
     it('должен корректно устанавливать флаг isShutdown', () => {
       expect(service.isShutdown()).toBe(false);
 
-      service.shutdown();
+      void service.shutdown();
 
       expect(service.isShutdown()).toBe(true);
     });
@@ -432,14 +423,14 @@ describe('SchedulerService', () => {
 
       const successTask = jest.fn().mockResolvedValue('success');
       const failTask = jest.fn().mockRejectedValue(new Error('fail'));
-      
+
       let retryAttempt = 0;
-      const retryTask = jest.fn().mockImplementation(async () => {
+      const retryTask = jest.fn().mockImplementation(() => {
         retryAttempt++;
         if (retryAttempt < 2) {
-          throw new Error('retry');
+          return Promise.reject(new Error('retry'));
         }
-        return 'retry-success';
+        return Promise.resolve('retry-success');
       });
 
       // Успешная задача
@@ -452,10 +443,15 @@ describe('SchedulerService', () => {
       ]);
 
       // Задача с retry
-      await service.enqueue('retry-key', retryTask, { maxRetries: 2, baseDelay: 10 });
+      await service.enqueue('retry-key', retryTask, {
+        maxRetries: 2,
+        baseDelay: 10,
+      });
 
       // Проваленная задача
-      await service.enqueue('fail-key', failTask, { maxRetries: 1, baseDelay: 10 }).catch(() => {});
+      await service
+        .enqueue('fail-key', failTask, { maxRetries: 1, baseDelay: 10 })
+        .catch(() => {});
 
       const stats = service.getStats();
 
@@ -488,7 +484,9 @@ describe('SchedulerService', () => {
       const failTask = jest.fn().mockRejectedValue(new Error('error'));
       const successTask = jest.fn().mockResolvedValue('success');
 
-      await service.enqueue('fail', failTask, { maxRetries: 0 }).catch(() => {});
+      await service
+        .enqueue('fail', failTask, { maxRetries: 0 })
+        .catch(() => {});
       await service.enqueue('success', successTask);
 
       expect(failTask).toHaveBeenCalled();
@@ -503,9 +501,11 @@ describe('SchedulerService', () => {
      * Тест: синхронные ошибки обрабатываются корректно
      */
     it('должен обрабатывать синхронные ошибки', async () => {
-      const task = jest.fn().mockImplementation(() => {
-        throw new Error('Synchronous error');
-      });
+      const task = jest
+        .fn()
+        .mockImplementation(() =>
+          Promise.reject(new Error('Synchronous error')),
+        );
 
       await expect(
         service.enqueue('sync-error', task, { maxRetries: 1, baseDelay: 10 }),
@@ -519,4 +519,3 @@ describe('SchedulerService', () => {
     });
   });
 });
-

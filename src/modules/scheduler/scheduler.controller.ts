@@ -49,37 +49,34 @@ export class SchedulerController {
    */
   @Post('tasks')
   @HttpCode(HttpStatus.ACCEPTED)
-  async enqueueTask(@Body() dto: EnqueueTaskDto): Promise<TaskResponseDto> {
-    this.logger.log(`Enqueue task request: key="${dto.key}", type="${dto.taskType}"`);
+  enqueueTask(@Body() dto: EnqueueTaskDto): TaskResponseDto {
+    this.logger.log(
+      `Enqueue task request: key="${dto.key}", type="${dto.taskType}"`,
+    );
 
-    try {
-      // Создаем mock задачу для демонстрации
-      // В реальном приложении здесь должна быть логика маршрутизации задач по типу
-      const taskFunction = async () => {
-        this.logger.debug(`Executing task: ${dto.taskType} with payload`, dto.payload);
-        
-        // Симуляция работы задачи
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        
-        return {
-          taskType: dto.taskType,
-          key: dto.key,
-          executedAt: new Date().toISOString(),
-          payload: dto.payload,
-        };
-      };
-
-      // Добавляем задачу в планировщик
-      const taskPromise = this.schedulerService.enqueue(
-        dto.key,
-        taskFunction,
-        {
-          maxRetries: dto.maxRetries,
-          baseDelay: dto.baseDelay,
-        },
+    const taskFunction = async () => {
+      this.logger.debug(
+        `Executing task: ${dto.taskType} with payload`,
+        dto.payload,
       );
 
-      // Не ждем завершения задачи, сразу возвращаем ответ
+      // for testing
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      return {
+        taskType: dto.taskType,
+        key: dto.key,
+        executedAt: new Date().toISOString(),
+        payload: dto.payload,
+      };
+    };
+
+    try {
+      const taskPromise = this.schedulerService.enqueue(dto.key, taskFunction, {
+        maxRetries: dto.maxRetries,
+        baseDelay: dto.baseDelay,
+      });
+
       taskPromise.catch((error) => {
         this.logger.error(`Task failed: key="${dto.key}"`, error);
       });
@@ -91,7 +88,7 @@ export class SchedulerController {
       );
     } catch (error) {
       this.logger.error(`Failed to enqueue task: key="${dto.key}"`, error);
-      
+
       if (error instanceof Error && error.message.includes('shutting down')) {
         return new TaskResponseDto(
           dto.key,
@@ -155,11 +152,10 @@ export class SchedulerController {
    */
   @Post('shutdown')
   @HttpCode(HttpStatus.OK)
-  async shutdown(): Promise<{ message: string; status: string }> {
+  shutdown(): { message: string; status: string } {
     this.logger.log('Shutdown requested via API');
 
-    // Запускаем shutdown асинхронно
-    this.schedulerService.shutdown().then(() => {
+    void this.schedulerService.shutdown().then(() => {
       this.logger.log('Shutdown completed via API');
     });
 
@@ -205,4 +201,3 @@ export class SchedulerController {
     };
   }
 }
-
