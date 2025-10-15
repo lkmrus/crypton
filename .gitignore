@@ -1,0 +1,16 @@
+.idea
+node_modules
+.env
+dist
+.DS_Store
+.vscode
+coverage
+*.log
+TODO.md
+prisma/dev.db
+prisma/dev.db-journal
+# exclude md files except README.md
+*.md
+!README.md
+
+/generated/prisma
